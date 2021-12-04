@@ -1,0 +1,67 @@
+Title: How to translate exception messages
+
+----
+
+Description: Translate Kirby's exception messages on the frontend
+
+----
+
+Published: 2021-12-05
+
+----
+
+Authors:
+- authors/sonja-broda
+
+----
+
+Text:
+
+When you have use cases like creating pages or users from the frontend programmatically, you might run into the issue that exceptions messages are always output in English in a single language site, even though Kirby provides translations for these messages.
+
+A typical simple example could look like this:
+
+```php
+<?php
+
+$kirby->impersonate('kirby');
+
+try {
+  $newPage = page('blog')->createChild([
+    'slug'     => Str::slug( 'My awesome post' ),
+    'template' => 'post',
+    'content'  => [
+      'title' => 'My awesome post',
+      'text'  => 'Some content here'
+    ],
+
+  ]);
+} catch (Exception $e) {
+  echo $e->getMessage();
+}
+```
+
+We try to create a new blog article and echo the error message when it fails, for example, because a page with the given slug already exists: "A page draft with the URL appendix "my-awesome-post" already exists"
+
+One way to solve this problem is to call the `I18::template()` method with the desired language code:
+
+```php
+try {
+  // …
+} catch (Exception $e) {
+   echo I18n::template($e->getKey(), null, $e->getData(), 'de' );
+}
+```
+
+Alternatively, you can set the `I18n::$locale` property in your templates or controllers:
+
+```php
+Kirby\Toolkit\I18n::$locale = 'de';
+
+try {
+  // …
+} catch (Exception $e) {
+   echo $e->getMessage();
+}
+```
+ 
