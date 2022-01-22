@@ -1,0 +1,213 @@
+Title: Creating images for PDF files
+
+----
+
+Published: 2022-01-22
+
+----
+
+Description: Display a nice auto-created image when linking to PDF flyers, booklets etc.
+
+----
+
+Authors:
+
+- authors/sonja-broda
+
+----
+Text:
+
+If you have a download section for PDF files like flyers or booklets, you might want to output a nice thumbnail for the download link instead of just a filename or PDF icon. Using a hook or a custom file method, we can auto-generate preview images either at file upload or on the fly.
+
+## Requirements
+
+Imagick PHP extension which in turn requires ImageMagick. Imagick is a native PHP extension to create and modify images using the ImageMagick API.
+
+For documentation about the Imagick methods used in these examples and other available image manipulation methods, check out the (link: https://www.php.net/manual/en/book.imagick.php text: PHP Imagick documentation).
+
+<info>
+While it is not necessary to set Kirby's (link: text: thumb driver) to `im` for these examples to work, I'd highly recommend you do so.
+</info>
+
+## Create image using a hook
+
+In our first example, we will create an image when a user uploads a PDF through the Panel and store it next to the PDF file in the page folder.
+
+You can register the hook in your `config.php` file or in a plugin file. For our example, we will create a plugin, because we need it for the second example, anyway.
+
+So, let's create a folder called `pdf-to-image` in the `/plugins` folder, and inside that new folder the obligatory `index.php` file.
+
+```php "/site/plugins/pdf-to-image/index.php"
+<?php
+
+use Kirby\Cms\App as Kirby;
+use Kirby\Cms\File;
+
+Kirby::plugin('cookbook/pdf-to-image', [
+  'hooks' => [
+    'file.create:after' => function ($file) {
+      // check if the extension is available
+      if (!extension_loaded('Imagick')) {
+        throw new Exception('The Imagick extension is not available.');
+      }
+      // only create preview for PDF files
+      if($file->mime() === 'application/pdf') {
+
+        $root        = $file->root();
+        $outputPath  = $root . '.jpg';
+        // create new Imagick instance
+        $im = new Imagick();
+        $im->setResolution(300, 300);
+        $im->setCompressionQuality($compression);
+
+        // only get the first page
+        $im->readImage($root . '[0]');
+        $im->setImageFormat('jpg');
+
+        // write the object to file
+        $im->writeImage($outputPath);
+        $im->clear();
+        $im->destroy();
+      }
+    }
+  ],
+]);
+```
+
+In your template code, you will be able to output the thumb for the given PDF based on the filename:
+
+```php
+<ul>
+  <?php foreach ($page->documents()->filterBy('extension', 'pdf') as $document): ?>
+    <li>
+      <a href="<?= $document->url() ?>">
+        <?php if ($preview = $page->images()->findBy('name', $document->filename())): ?>
+          <img src="<?= $preview->resize(200)->url() ?>" alt="">
+        <?php endif; ?>
+      </a>
+    </li>
+  <?php endforeach; ?>
+</ul>
+```
+## Create image using a custom file method
+
+Our second option is to create the image "on the fly" when the file method is called. Using a file method is much more versatile, because you can pass your options as parameters and you only create the preview files when needed.
+
+```php "/site/plugins/pdf-to-image/index.php"
+<?php
+
+use Kirby\Cms\App as Kirby;
+use Kirby\Filesystem\F;
+use Kirby\Cms\File;
+
+Kirby::plugin('cookbook/pdf-to-image', [
+  'fileMethods' => [
+    'preview' => function (int $resolution = 300, array $props = [], $force = false): File {
+      // throw error if Imagick extension is not available
+      if (!extension_loaded('Imagick')) {
+        throw new Exception('The Imagick extension is not available');
+      }
+      // only create preview for PDF files
+      if ($this->mime() !== 'application/pdf') {
+        throw new Exception('File is not a PDF file');
+      }
+
+      $allowedFormats = ['jpg', 'jpeg', 'png', 'webp'];
+      $format         = $props['format'] ?? 'jpg';
+      $format         = in_array($format, $allowedFormats, true) ? $format : 'jpg';
+      $page           = $props['page'] ?? 0; // page number - 1
+      $compression    = $props['compression'] ?? null;
+      $colorSpace     = $props['colorSpace'] ?? null;
+      $pdf            = $this->root();
+      $outputPath     = $pdf . '-' . $resolution . '.' . $format;
+      $previewName    = basename($outputPath);
+
+
+      if ($force === true || !F::exists($outputPath) || (F::modified($outputPath) < $this->modified())) {
+        // create a new Imagick instance with the PDF file and other settings as input
+        $im = new Imagick();
+        $im->pingImage($pdf);
+        $pages = $im->getNumberImages();
+        // set the page to 0 if the given page number is higher than number of pages
+        $page = $page <= $pages - 1 ? $page : 0;
+        $im->setResolution($resolution, $resolution);
+        // we only read the given page of the PDF, defaults to first page
+        if ($colorSpace !== null) {
+          $im->setColorspace($colorSpace);
+        }
+        if ($compression !== null) {
+          $im->setCompressionQuality($compression);
+        }
+        $im->readImage(sprintf('%s[%s]', $pdf, $page));
+        $im->setFormat($format);
+
+        // write the object to file
+        $im->writeImage($outputPath);
+        $im->clear();
+        $im->destroy();
+      }
+      // return a new File object
+      return new File([
+        'filename' => $previewName,
+        'parent'   => $this->parent(),
+      ]);
+    }
+  ]
+]);
+```
+<warning>
+The downside of this approach is that the **first** call to this method might take a while to generate. It might therefore make sense to run a script that loops through all affected pages where the method is used when you convert many PDF files or the files change often. Once the preview image is created, all subsequent calls will use the existing image.
+</warning>
+
+Our `preview()` file method accepts two parameters: `$resolution` and a `$props` array.
+
+Inside the `$props` array you can set the following keys (here the defaults):
+
+```php
+$props = [
+  'format'       => 'jpg',
+  'compression'  => null,
+  'colorSpace'   => null,
+  'page'         => 0,
+];
+```
+
+We can now call our new file method on a PDF file like this, accepting the default settings:
+
+```php
+<?php if ($pdf = $page->files('myflyer.pdf')): ?>
+  <img src="<?= $pdf->preview()->url() ?>" alt="">
+<?php endif; ?>
+```
+
+Or by passing parameters to the method:
+
+```php
+<?php if ($pdf = $page->files('myflyer.pdf')): ?>
+  <img src="<?= $pdf->preview(300, ['compression' => '80'])->url() ?>" alt="">
+<?php endif; ?>
+```
+
+Since the method returns a `Kirby\Cms\File` object, we can also create thumbs:
+
+```php
+<?php if ($pdf = $page->file('myflyer.pdf')): ?>
+  <img src="<?= $pdf->preview()->resize(200)->url() ?>" alt="">
+<?php endif; ?>
+```
+
+If would also be possible to integrate more image manipulation methods into the `preview()` method.
+
+## A note on large files
+
+In the `preview()` method above, we use `pingImage()` to get information about the PDF file, so that we can make sure that the given page is not larger than the number of pages in the PDF:
+
+```php
+$im->pingImage($pdf);
+$pages = $im->getNumberImages();
+// set the page to 0 if the given page number is higher than number of pages
+$page = $page <= $pages - 1 ? $page : 0;
+```
+
+Particularly with larger files, this will considerably slow down preview generation. If you always just want to convert the first page, you can remove this code and set the page to `0`.
+
